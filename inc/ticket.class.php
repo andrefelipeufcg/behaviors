@@ -145,19 +145,29 @@ class PluginBehaviorsTicket {
       }
 
       //Look for the user by his id
-      $query =  "SELECT DISTINCT `glpi_users`.`id` AS users_id,
-                                 `glpi_users`.`language` AS language,
-                                 `$userlinktable`.`use_notification` AS notif,
-                                 `$userlinktable`.`alternative_email` AS altemail
-                 FROM `$userlinktable`
-                 LEFT JOIN `glpi_users` ON (`$userlinktable`.`users_id` = `glpi_users`.`id`)
-                 INNER JOIN `glpi_profiles_users`
-                    ON (`glpi_profiles_users`.`users_id` = `glpi_users`.`id` ".
-                        $dbu->getEntitiesRestrictRequest("AND", "glpi_profiles_users", "entities_id",
-                                                         $target->getEntity(), true).")
-                 WHERE `$userlinktable`.`$fkfield` = '".$target->obj->fields["id"]."'
-                       AND `$userlinktable`.`type` = '$type'
-                       $querylast";
+      // -----------------------------
+      // SAFER QUERY: use aliases and explicit JOIN on glpi_users
+      // -----------------------------
+      // Build the entities restriction part safely
+      $entitiesRestrict = $dbu->getEntitiesRestrictRequest("AND", "glpi_profiles_users", "entities_id",
+                                                          $target->getEntity(), true);
+
+      // normalize ids
+      $objId = intval($target->obj->fields["id"]);
+      $typeInt = intval($type);
+
+      // if $querylast contains users_id condition, keep it as-is (already quoted)
+      // compose query using aliases to ensure glpi_users is always joined
+      $query = "SELECT DISTINCT u.id AS users_id,
+                                 u.language AS language,
+                                 t.use_notification AS notif,
+                                 t.alternative_email AS altemail
+                FROM `{$userlinktable}` AS t
+                INNER JOIN `glpi_users` AS u ON (t.users_id = u.id)
+                INNER JOIN `glpi_profiles_users` AS pu ON (pu.users_id = u.id $entitiesRestrict)
+                WHERE t.`{$fkfield}` = '{$objId}'
+                  AND t.type = '{$typeInt}'
+                  {$querylast}";
 
       foreach ($DB->request($query) as $data) {
          //Add the user email and language in the notified users list
@@ -647,6 +657,7 @@ class PluginBehaviorsTicket {
       if ($config->getField('is_ticketcategory_mandatory_on_assign')) {
          if (!$cat
              && isset($ticket->input['_itil_assign'])
+             && ($ticket->input['_itil_assign']['_type'] == 'user')
              && ($ticket->input['_itil_assign']['users_id']
                  || $ticket->input['_itil_assign']['groups_id'])) {
             unset($ticket->input);
@@ -783,7 +794,7 @@ class PluginBehaviorsTicket {
                unset($_SESSION['glpi_behaviors_auto_group_request']);
             }
 
-            if ($config->getField('use_assign_user_group') > 0
+            if ($config->getField('use_assign_user_group')
                 && isset($_POST['_actors'])) {
                $actors = json_decode($_POST['_actors'], true);
                if (isset($actors['assign'])) {
